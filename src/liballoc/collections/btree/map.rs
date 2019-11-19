@@ -525,7 +525,39 @@ impl<K: Ord, V> BTreeMap<K, V> {
         }
     }
 
-    /// Clears the map, removing all values.
+    /// Clears the map, returning all key-value pairs as an iterator.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// #![feature(btree_drain_retain)]
+    /// use std::collections::BTreeMap;
+    ///
+    /// let mut a = BTreeMap::new();
+    /// a.insert(1, "a");
+    /// a.insert(2, "b");
+    ///
+    /// for (k, v) in a.drain().take(1) {
+    ///     assert!(k == 1 || k == 2);
+    ///     assert!(v == "a" || v == "b");
+    /// }
+    ///
+    /// assert!(a.is_empty());
+    /// ```
+    #[unstable(feature = "btree_drain_retain", issue = "42849")]
+    pub fn drain(&mut self) -> IntoIter<K, V> {
+        let length = mem::replace(&mut self.length, 0);
+        let root = mem::replace(&mut self.root, node::Root::shared_empty_root());
+        let root1 = unsafe { ptr::read(&root).into_ref() };
+        let root2 = unsafe { ptr::read(&root).into_ref() };
+        let front = first_leaf_edge(root1);
+        let back = last_leaf_edge(root2);
+        IntoIter { front, back, length }
+    }
+
+    /// Clears the map, removing all key-value pairs.
     ///
     /// # Examples
     ///
@@ -839,6 +871,47 @@ impl<K: Ord, V> BTreeMap<K, V> {
                      .remove())
             }
             GoDown(_) => None,
+        }
+    }
+
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// In other words, remove all pairs `(k, v)` such that `f(&k, &mut v)` returns `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(btree_drain_retain)]
+    /// use std::collections::BTreeMap;
+    ///
+    /// let mut map: BTreeMap<i32, i32> = (0..8).map(|x|(x, x)).collect();
+    /// map.retain(|&k, _| k % 2 == 0);
+    /// assert_eq!(map.len(), 4);
+    /// ```
+    #[unstable(feature = "btree_drain_retain", issue = "42849")]
+    pub fn retain<F>(&mut self, mut f: F)
+        where F: FnMut(&K, &mut V) -> bool,
+    {
+        let mut cur_leaf_edge = first_leaf_edge(self.root.as_mut());
+        while let Some((kv, next_leaf_edge)) = RangeMut::next_handles(cur_leaf_edge) {
+            let (k, v) = unsafe { ptr::read(&kv).into_kv_mut() };
+            let retain = f(k, v);
+            cur_leaf_edge = if retain {
+                next_leaf_edge
+            } else {
+                let (k, _v, hole) = OccupiedEntry::remove_kv_by_handle(kv);
+                // next_leaf_edge is now invalid or wrong
+                self.length -= 1;
+                match hole {
+                    Some(next_leaf_edge) => next_leaf_edge,
+                    None => {
+                        let root1 = self.root.as_mut();
+                        let root2 = unsafe { ptr::read(&root1) };
+                        let (front, _back) = range_search(root1, root2, k..);
+                        front
+                    }
+                }
+            }
         }
     }
 
@@ -1804,6 +1877,41 @@ impl<'a, K, V> RangeMut<'a, K, V> {
             }
         }
     }
+
+    // Transform given leaf edge handle into handles of next kv and next leaf edge
+    fn next_handles(
+        leaf_edge: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>
+        ) -> Option<(Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
+                     Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>)> {
+        let mut cur_edge = match leaf_edge.right_kv() {
+            Ok(kv) => {
+                let next_leaf_edge = unsafe { ptr::read(&kv).right_edge() };
+                return Some((kv.forget_node_type(), next_leaf_edge));
+            }
+            Err(last_edge) => {
+                match last_edge.into_node().ascend() {
+                    Ok(next_level) => next_level,
+                    Err(_) => return None,
+                }
+            }
+        };
+
+        loop {
+            cur_edge = match cur_edge.right_kv() {
+                Ok(kv) => {
+                    let right_edge = unsafe { ptr::read(&kv).right_edge() };
+                    let next_leaf_edge = first_leaf_edge(right_edge.descend());
+                    return Some((kv.forget_node_type(), next_leaf_edge));
+                }
+                Err(last_edge) => {
+                    match last_edge.into_node().ascend() {
+                        Ok(next_level) => next_level,
+                        Err(_) => return None,
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[stable(feature = "btree_range", since = "1.17.0")]
@@ -2618,9 +2726,21 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     fn remove_kv(self) -> (K, V) {
         *self.length -= 1;
 
-        let (small_leaf, old_key, old_val) = match self.handle.force() {
+        let (k, v, _) = OccupiedEntry::remove_kv_by_handle(self.handle);
+        (k, v)
+    }
+
+    // Removes and returns a key/value-pair, and optionally (if cheap), returns the resulting edge
+    // corresponding to the former left and right edges of the entry.
+    fn remove_kv_by_handle(
+            handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>)
+            -> (K, V, Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>) {
+        let (small_leaf, old_key, old_val) = match handle.force() {
             Leaf(leaf) => {
                 let (hole, old_key, old_val) = leaf.remove();
+                if hole.reborrow().into_node().len() >= node::MIN_LEN {
+                    return (old_key, old_val, Some(hole))
+                }
                 (hole.into_node(), old_key, old_val)
             }
             Internal(mut internal) => {
@@ -2641,7 +2761,7 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
 
         // Handle underflow
         let mut cur_node = small_leaf.forget_type();
-        while cur_node.len() < node::CAPACITY / 2 {
+        while cur_node.len() < node::MIN_LEN {
             match handle_underfull_node(cur_node) {
                 AtRoot => break,
                 EmptyParent(_) => unreachable!(),
@@ -2658,7 +2778,7 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
             }
         }
 
-        (old_key, old_val)
+        (old_key, old_val, None)
     }
 }
 
