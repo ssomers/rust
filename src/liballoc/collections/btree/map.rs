@@ -1458,7 +1458,7 @@ tree_hopper!{
 }
 tree_hopper!{
     right_kv + right_edge + first_leaf_edge @ marker::Immut<'a>
-    =: unsafe fn right_leaf_edge_unchecked
+    =: fn right_leaf_edge_unchecked
 }
 tree_hopper!{
     unsafe_right_kv + unsafe_right_edge + first_leaf_edge @ marker::Mut<'a>
@@ -1478,7 +1478,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
             None
         } else {
             self.length -= 1;
-            unsafe { Some(self.range.next_unchecked()) }
+            Some(self.range.next_unchecked())
         }
     }
 
@@ -1501,7 +1501,7 @@ impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Iter<'a, K, V> {
             None
         } else {
             self.length -= 1;
-            unsafe { Some(self.range.next_back_unchecked()) }
+            Some(self.range.next_back_unchecked())
         }
     }
 }
@@ -1754,7 +1754,7 @@ impl<'a, K, V> Iterator for Range<'a, K, V> {
         if self.front == self.back {
             None
         } else {
-            unsafe { Some(self.next_unchecked()) }
+            Some(self.next_unchecked())
         }
     }
 
@@ -1798,7 +1798,7 @@ impl<K, V> ExactSizeIterator for ValuesMut<'_, K, V> {
 impl<K, V> FusedIterator for ValuesMut<'_, K, V> {}
 
 impl<'a, K, V> Range<'a, K, V> {
-    unsafe fn next_unchecked(&mut self) -> (&'a K, &'a V) {
+    fn next_unchecked(&mut self) -> (&'a K, &'a V) {
         let kv = right_leaf_edge_unchecked(&mut self.front);
         kv.into_kv()
     }
@@ -1810,13 +1810,13 @@ impl<'a, K, V> DoubleEndedIterator for Range<'a, K, V> {
         if self.front == self.back {
             None
         } else {
-            unsafe { Some(self.next_back_unchecked()) }
+            Some(self.next_back_unchecked())
         }
     }
 }
 
 impl<'a, K, V> Range<'a, K, V> {
-    unsafe fn next_back_unchecked(&mut self) -> (&'a K, &'a V) {
+    fn next_back_unchecked(&mut self) -> (&'a K, &'a V) {
         let kv = left_leaf_edge_unchecked(&mut self.back);
         kv.into_kv()
     }
