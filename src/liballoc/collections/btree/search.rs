@@ -54,12 +54,16 @@ where
     Q: Ord,
     K: Borrow<Q>,
 {
-    for (i, k) in node.keys().iter().enumerate() {
-        match key.cmp(k.borrow()) {
-            Ordering::Greater => {}
-            Ordering::Equal => return (i, true),
-            Ordering::Less => return (i, false),
+    let len = node.len();
+    if len > 0 {
+        // make sure that `!node.is_shared_root()`
+        for (i, k) in node.keys().iter().enumerate() {
+            match key.cmp(k.borrow()) {
+                Ordering::Greater => {}
+                Ordering::Equal => return (i, true),
+                Ordering::Less => return (i, false),
+            }
         }
     }
-    (node.keys().len(), false)
+    (len, false)
 }
