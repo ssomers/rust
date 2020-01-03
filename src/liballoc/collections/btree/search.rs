@@ -32,6 +32,28 @@ where
     }
 }
 
+pub fn search_tree_mut<'a, K, V, Q: ?Sized>(
+    mut node: NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,
+    key: &Q,
+) -> SearchResult<marker::Mut<'a>, K, V, marker::LeafOrInternal, marker::Leaf>
+where
+    Q: Ord,
+    K: Borrow<Q>,
+{
+    loop {
+        match search_node_mut(node, key) {
+            Found(handle) => return Found(handle),
+            GoDown(handle) => match handle.force() {
+                Leaf(leaf) => return GoDown(leaf),
+                Internal(internal) => {
+                    node = internal.descend();
+                    continue;
+                }
+            },
+        }
+    }
+}
+
 pub fn search_node<BorrowType, K, V, Type, Q: ?Sized>(
     node: NodeRef<BorrowType, K, V, Type>,
     key: &Q,
@@ -46,6 +68,20 @@ where
     }
 }
 
+pub fn search_node_mut<'a, K, V, Type, Q: ?Sized>(
+    mut node: NodeRef<marker::Mut<'a>, K, V, Type>,
+    key: &Q,
+) -> SearchResult<marker::Mut<'a>, K, V, Type, Type>
+where
+    Q: Ord,
+    K: Borrow<Q>,
+{
+    match search_linear_mut(&mut node, key) {
+        (idx, true) => Found(Handle::new_kv(node, idx)),
+        (idx, false) => SearchResult::GoDown(Handle::new_edge(node, idx)),
+    }
+}
+
 pub fn search_linear<BorrowType, K, V, Type, Q: ?Sized>(
     node: &NodeRef<BorrowType, K, V, Type>,
     key: &Q,
@@ -55,6 +91,24 @@ where
     K: Borrow<Q>,
 {
     for (i, k) in node.keys().iter().enumerate() {
+        match key.cmp(k.borrow()) {
+            Ordering::Greater => {}
+            Ordering::Equal => return (i, true),
+            Ordering::Less => return (i, false),
+        }
+    }
+    (node.keys().len(), false)
+}
+
+pub fn search_linear_mut<'a, K, V, Type, Q: ?Sized>(
+    node: &mut NodeRef<marker::Mut<'a>, K, V, Type>,
+    key: &Q,
+) -> (usize, bool)
+where
+    Q: Ord,
+    K: Borrow<Q>,
+{
+    for (i, k) in node.keys_mut().iter().enumerate() {
         match key.cmp(k.borrow()) {
             Ordering::Greater => {}
             Ordering::Equal => return (i, true),

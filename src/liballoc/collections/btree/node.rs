@@ -497,7 +497,7 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
         self.node.as_ptr()
     }
 
-    fn keys_mut(&mut self) -> &mut [K] {
+    pub fn keys_mut(&mut self) -> &mut [K] {
         unsafe { self.reborrow_mut().into_key_slice_mut() }
     }
 

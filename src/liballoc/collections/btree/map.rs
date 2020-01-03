@@ -743,7 +743,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord,
     {
-        match search::search_tree(self.root.as_mut(), key) {
+        match search::search_tree_mut(self.root.as_mut(), key) {
             Found(handle) => Some(handle.into_kv_mut().1),
             GoDown(_) => None,
         }
