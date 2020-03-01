@@ -40,6 +40,9 @@ use core::slice;
 use crate::alloc::{AllocRef, Global, Layout};
 use crate::boxed::Box;
 
+use core::sync::atomic;
+static MUT_REFS: atomic::AtomicI32 = atomic::AtomicI32::new(0);
+
 const B: usize = 6;
 pub const MIN_LEN: usize = B - 1;
 pub const CAPACITY: usize = 2 * B - 1;
@@ -221,6 +224,12 @@ impl<K, V> Root<K, V> {
     }
 
     pub fn as_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::LeafOrInternal> {
+        if self.is_shared_root() {
+            if MUT_REFS.fetch_add(1, atomic::Ordering::SeqCst) > 0 {
+                panic!("going to create another mut NodeRef");
+            }
+            assert!(MUT_REFS.fetch_sub(1, atomic::Ordering::SeqCst) > 0);
+        }
         NodeRef {
             height: self.height,
             node: self.node.as_ptr(),

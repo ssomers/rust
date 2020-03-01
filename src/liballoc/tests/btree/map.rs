@@ -8,8 +8,27 @@ use std::ops::RangeBounds;
 use std::panic::catch_unwind;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
 
 use super::DeterministicRng;
+
+#[test]
+fn test_mt() {
+    let children = (0..6)
+        .map(|_| {
+            thread::spawn(|| {
+                let mut map: BTreeMap<i32, ()> = BTreeMap::new();
+                for _ in 0..1_000_000 {
+                    map.remove(&0);
+                    assert!(map.is_empty());
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for child in children {
+        println!("{:?}", child.join());
+    }
+}
 
 #[test]
 fn test_basic_large() {
