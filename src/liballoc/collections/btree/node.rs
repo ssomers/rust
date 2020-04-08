@@ -148,8 +148,51 @@ pub struct Root<K, V> {
     height: usize,
 }
 
-unsafe impl<K: Sync, V: Sync> Sync for Root<K, V> {}
-unsafe impl<K: Send, V: Send> Send for Root<K, V> {}
+pub struct Tree<K, V> {
+    pub root: Root<K, V>,
+    first_leaf: BoxedNode<K, V>,
+}
+
+impl<K, V> Tree<K, V> {
+    pub fn new_tree() -> Tree<K, V> {
+        let root = Root::new_leaf();
+        let first_leaf = unsafe { ptr::read(&root.node) };
+        Tree { root, first_leaf }
+    }
+    pub fn first_leaf_node(&self) -> NodeRef<marker::Immut<'_>, K, V, marker::Leaf> {
+        Root::get_ref_to_leaf(&self.first_leaf)
+    }
+
+    pub fn first_leaf_node_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::Leaf> {
+        self.root.get_mut_to_leaf(&mut self.first_leaf)
+    }
+
+    pub fn extreme_leaf_edges_mut(
+        &mut self,
+    ) -> (
+        Handle<NodeRef<marker::Mut<'_>, K, V, marker::Leaf>, marker::Edge>,
+        Handle<NodeRef<marker::Mut<'_>, K, V, marker::Leaf>, marker::Edge>,
+    ) {
+        let front = Root::get_minimut_to_leaf(&self.first_leaf).first_edge();
+        let back = self.root.as_mut().last_leaf_edge();
+        (front, back)
+    }
+
+    pub fn extreme_leaf_edges_owned(
+        self,
+    ) -> (
+        Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge>,
+        Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge>,
+    ) {
+        let root2 = unsafe { ptr::read(&self.root).into_ref() };
+        let front = Root::get_owned_to_leaf(&self.first_leaf).first_edge();
+        let back = root2.last_leaf_edge();
+        (front, back)
+    }
+}
+
+unsafe impl<K: Sync, V: Sync> Sync for Tree<K, V> {}
+unsafe impl<K: Send, V: Send> Send for Tree<K, V> {}
 
 impl<K, V> Root<K, V> {
     /// Returns a new owned tree, with its own root node that is initially empty.
@@ -182,6 +225,28 @@ impl<K, V> Root<K, V> {
             root: ptr::null(),
             _marker: PhantomData,
         }
+    }
+
+    fn get_ref_to_leaf<'a>(
+        node: &BoxedNode<K, V>,
+    ) -> NodeRef<marker::Immut<'a>, K, V, marker::Leaf> {
+        NodeRef { height: 0, node: node.as_ptr(), root: ptr::null(), _marker: PhantomData }
+    }
+
+    /// For mutable iteration, mutateting only values and not tree structure.
+    fn get_minimut_to_leaf(node: &BoxedNode<K, V>) -> NodeRef<marker::Mut<'_>, K, V, marker::Leaf> {
+        NodeRef { height: 0, node: node.as_ptr(), root: ptr::null(), _marker: PhantomData }
+    }
+
+    fn get_mut_to_leaf(
+        &mut self,
+        node: &mut BoxedNode<K, V>,
+    ) -> NodeRef<marker::Mut<'_>, K, V, marker::Leaf> {
+        NodeRef { height: 0, node: node.as_ptr(), root: self as *mut _, _marker: PhantomData }
+    }
+
+    fn get_owned_to_leaf(node: &BoxedNode<K, V>) -> NodeRef<marker::Owned, K, V, marker::Leaf> {
+        NodeRef { height: 0, node: node.as_ptr(), root: ptr::null(), _marker: PhantomData }
     }
 
     /// Adds a new internal node with a single edge, pointing to the previous root, and make that
@@ -365,6 +430,11 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     pub fn last_edge(self) -> Handle<Self, marker::Edge> {
         let len = self.len();
         unsafe { Handle::new_edge(self, len) }
+    }
+
+    pub fn first_kv_if_any(self) -> Option<Handle<Self, marker::KV>> {
+        let len = self.len();
+        if len > 0 { Some(unsafe { Handle::new_kv(self, 0) }) } else { None }
     }
 
     /// Note that `self` must be nonempty.
