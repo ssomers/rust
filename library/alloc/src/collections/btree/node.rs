@@ -205,8 +205,7 @@ impl<K, V> Root<K, V> {
     /// no cleanup is done on any of the other children.
     /// This decreases the height by 1 and is the opposite of `push_internal_level`.
     ///
-    /// Requires exclusive access to the `Root` object but not to the root node;
-    /// it will not invalidate existing handles or references to the root node.
+    /// Requires exclusive access to the `Root` object and to the root node.
     ///
     /// Panics if there is no internal level, i.e., if the root node is a leaf.
     pub fn pop_internal_level(&mut self) {
@@ -220,9 +219,8 @@ impl<K, V> Root<K, V> {
             )
         };
         self.height -= 1;
-        unsafe {
-            (*self.node_as_mut().as_leaf_mut()).parent = ptr::null();
-        }
+        let root_node = unsafe { &mut *self.node_as_mut().as_leaf_mut() };
+        root_node.parent = ptr::null();
 
         unsafe {
             Global.dealloc(NonNull::from(top).cast(), Layout::new::<InternalNode<K, V>>());
