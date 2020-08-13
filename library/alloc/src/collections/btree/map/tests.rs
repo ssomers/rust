@@ -1147,6 +1147,37 @@ mod test_drain_filter {
         assert_eq!(map.last_entry().unwrap().key(), &8);
         map.check();
     }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri reports the expected leak
+    fn forget_height_1() {
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+        struct D;
+        impl Drop for D {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mut map: BTreeMap<_, _> = (0..MIN_INSERTS_HEIGHT_1).map(|i| (i, D)).collect();
+        map.remove(&0); // leaving 2 levels on the verge of collapse, 5 + 1 + 5 elements.
+        map.check();
+        assert_eq!(map.height(), Some(1));
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+
+        let mut it = map.drain_filter(|_, _| true);
+        assert_eq!(it.size_hint(), (0, Some(MIN_INSERTS_HEIGHT_1 - 1)));
+        assert_eq!(it.next().unwrap().0, 1);
+        assert_eq!(it.size_hint(), (0, Some(MIN_INSERTS_HEIGHT_1 - 2)));
+        assert_eq!(DROPS.load(Ordering::SeqCst), 2);
+        mem::forget(it);
+        assert_eq!(map.len(), 0);
+        assert_eq!(map.height(), None);
+        map.check();
+        drop(map);
+        assert_eq!(DROPS.load(Ordering::SeqCst), 2); // more would be nice to have.
+    }
 }
 
 #[test]

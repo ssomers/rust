@@ -333,3 +333,14 @@ impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
         }
     }
 }
+
+impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+    pub fn root_node(mut self) -> Self {
+        loop {
+            self = match self.ascend() {
+                Ok(edge) => edge.into_node().forget_type(),
+                Err(root) => return root,
+            }
+        }
+    }
+}

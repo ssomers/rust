@@ -1,3 +1,5 @@
+// ignore-tidy-filelength
+
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::{self, Debug};
@@ -1277,16 +1279,28 @@ impl<K: Ord, V> BTreeMap<K, V> {
     }
 
     pub(super) fn drain_filter_inner(&mut self) -> DrainFilterInner<'_, K, V> {
-        if let Some(root) = self.root.as_mut() {
-            let (root, dormant_root) = DormantMutRef::new(root);
-            let front = root.node_as_mut().first_leaf_edge();
+        let (map, dormant_map) = DormantMutRef::new(self);
+        // Leak amplification: wipe root and length in case caller skips drop handler.
+        if let Some(root) = map.root.take() {
+            let length = mem::replace(&mut map.length, 0);
+            let height = root.height();
+
+            let front = root.into_node_mut().first_leaf_edge();
             DrainFilterInner {
-                length: &mut self.length,
-                dormant_root: Some(dormant_root),
-                cur_leaf_edge: Some(front),
+                dormant_map: Some(dormant_map),
+                position: Some(DrainFilterPosition::Edge(front)),
+                height,
+                length,
+                remaining: length,
             }
         } else {
-            DrainFilterInner { length: &mut self.length, dormant_root: None, cur_leaf_edge: None }
+            DrainFilterInner {
+                dormant_map: None,
+                position: None,
+                height: 0,
+                length: 0,
+                remaining: 0,
+            }
         }
     }
 
@@ -1671,11 +1685,21 @@ where
 /// Most of the implementation of DrainFilter, independent of the type
 /// of the predicate, thus also serving for BTreeSet::DrainFilter.
 pub(super) struct DrainFilterInner<'a, K: 'a, V: 'a> {
-    length: &'a mut usize,
-    // dormant_root is wrapped in an Option to be able to `take` it.
-    dormant_root: Option<DormantMutRef<'a, node::Root<K, V>>>,
-    // cur_leaf_edge is wrapped in an Option because maps without root lack a leaf edge.
-    cur_leaf_edge: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
+    // wrapped in an Option to be able to `take` it in the drop handler.
+    dormant_map: Option<DormantMutRef<'a, BTreeMap<K, V>>>,
+    // wrapped in an Option some maps don't have any:
+    position: Option<DrainFilterPosition<'a, K, V>>,
+    height: usize,
+    length: usize,
+    remaining: usize,
+}
+enum DrainFilterPosition<'a, K: 'a, V: 'a> {
+    // Initial and normal position on a leaf edge.
+    Edge(Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>),
+    // Intermediate position on a KV, that sticks around if a predicate panics.
+    KV(Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>),
+    // End position on the root node.
+    Root(NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>),
 }
 
 #[unstable(feature = "btree_drain_filter", issue = "70530")]
@@ -1716,11 +1740,42 @@ where
     }
 }
 
+impl<K, V> Drop for DrainFilterInner<'_, K, V> {
+    fn drop(&mut self) {
+        if let Some(dormant_map) = self.dormant_map.take() {
+            let root_node = match self.position.take() {
+                None => unreachable!(),
+                Some(DrainFilterPosition::Edge(edge)) => {
+                    // panic during drop
+                    edge.into_node().forget_type().root_node()
+                }
+                Some(DrainFilterPosition::KV(kv)) => {
+                    // panic in predicate
+                    kv.into_node().root_node()
+                }
+                Some(DrainFilterPosition::Root(root_node)) => root_node,
+            };
+            let mut root = node::Root::restore_from_node(root_node);
+            for _ in self.height..root.height() {
+                root.pop_internal_level();
+            }
+            debug_assert_eq!(self.height, root.height());
+
+            let map = unsafe { dormant_map.awaken() };
+            map.root = Some(root);
+            map.length = self.length;
+        }
+    }
+}
+
 impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     /// Allow Debug implementations to predict the next element.
     pub(super) fn peek(&self) -> Option<(&K, &V)> {
-        let edge = self.cur_leaf_edge.as_ref()?;
-        edge.reborrow().next_kv().ok().map(|kv| kv.into_kv())
+        if let Some(DrainFilterPosition::Edge(edge)) = self.position.as_ref() {
+            edge.reborrow().next_kv().ok().map(|kv| kv.into_kv())
+        } else {
+            None
+        }
     }
 
     /// Implementation of a typical `DrainFilter::next` method, given the predicate.
@@ -1728,28 +1783,62 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
-        while let Ok(mut kv) = self.cur_leaf_edge.take()?.next_kv() {
-            let (k, v) = kv.kv_mut();
-            if pred(k, v) {
-                *self.length -= 1;
-                let (kv, pos) = kv.remove_kv_tracking(|| {
-                    // SAFETY: we will touch the root in a way that will not
-                    // invalidate the position returned.
-                    let root = unsafe { self.dormant_root.take().unwrap().awaken() };
-                    root.pop_internal_level();
-                    self.dormant_root = Some(DormantMutRef::new(root).1);
-                });
-                self.cur_leaf_edge = Some(pos);
-                return Some(kv);
+        let mut cur_leaf_edge = match self.position.take() {
+            None => return None,
+            Some(DrainFilterPosition::Root(root_node)) => {
+                self.position = Some(DrainFilterPosition::Root(root_node));
+                return None;
             }
-            self.cur_leaf_edge = Some(kv.next_leaf_edge());
+            Some(DrainFilterPosition::KV(kv)) => {
+                self.position = Some(DrainFilterPosition::KV(kv));
+                return None;
+            }
+            Some(DrainFilterPosition::Edge(edge)) => edge,
+        };
+
+        loop {
+            match cur_leaf_edge.next_kv() {
+                Err(root_node) => {
+                    self.position = Some(DrainFilterPosition::Root(root_node));
+                    return None;
+                }
+                Ok(kv) => {
+                    self.remaining -= 1;
+                    // Store the intermediate position in case the predicate panics.
+                    self.position = Some(DrainFilterPosition::KV(kv));
+                    let drain = self
+                        .position
+                        .as_mut()
+                        .map(|pos| match pos {
+                            DrainFilterPosition::KV(kv) => {
+                                let (k, v) = kv.kv_mut();
+                                pred(k, v)
+                            }
+                            _ => unreachable!(),
+                        })
+                        .unwrap();
+                    let kv = if let Some(DrainFilterPosition::KV(kv)) = self.position.take() {
+                        kv
+                    } else {
+                        unreachable!()
+                    };
+                    if drain {
+                        self.length -= 1;
+                        let (kv, pos) = kv.remove_kv_tracking(|emptied_internal_node| {
+                            self.height = emptied_internal_node.height() - 1
+                        });
+                        self.position = Some(DrainFilterPosition::Edge(pos));
+                        return Some(kv);
+                    }
+                    cur_leaf_edge = kv.next_leaf_edge();
+                }
+            }
         }
-        None
     }
 
     /// Implementation of a typical `DrainFilter::size_hint` method.
     pub(super) fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(*self.length))
+        (0, Some(self.remaining))
     }
 }
 
@@ -2767,7 +2856,7 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     // Body of `remove_entry`, separate to keep the above implementations short.
     fn remove_kv(self) -> (K, V) {
         let mut emptied_internal_root = false;
-        let (old_kv, _) = self.handle.remove_kv_tracking(|| emptied_internal_root = true);
+        let (old_kv, _) = self.handle.remove_kv_tracking(|_| emptied_internal_root = true);
         // SAFETY: we consumed the intermediate root borrow, `self.handle`.
         let map = unsafe { self.dormant_map.awaken() };
         map.length -= 1;
@@ -2782,10 +2871,13 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV> {
     /// Removes a key/value-pair from the map, and returns that pair, as well as
     /// the leaf edge corresponding to that former pair.
-    fn remove_kv_tracking<F: FnOnce()>(
+    fn remove_kv_tracking<F>(
         self,
-        handle_emptied_internal_root: F,
-    ) -> ((K, V), Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>) {
+        handle_emptied_parent: F,
+    ) -> ((K, V), Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>)
+    where
+        F: FnOnce(NodeRef<marker::Mut<'a>, K, V, marker::Internal>),
+    {
         let (old_kv, mut pos, was_internal) = match self.force() {
             Leaf(leaf) => {
                 let (old_kv, pos) = leaf.remove();
@@ -2836,8 +2928,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInter
                     if parent.len() == 0 {
                         // The parent that was just emptied must be the root,
                         // because nodes on a lower level would not have been
-                        // left with a single child.
-                        handle_emptied_internal_root();
+                        // left with a single child. Or, during `DrainFilter`
+                        // use, its ancestors have been emptied earlier.
+                        // The parent and its ancestors should be popped off.
+                        handle_emptied_parent(parent);
                         break;
                     } else {
                         cur_node = parent.forget_type();
@@ -2948,8 +3042,16 @@ fn handle_underfull_node<K, V>(
     let (is_left, mut handle) = match parent.left_kv() {
         Ok(left) => (true, left),
         Err(parent) => {
-            let right = unsafe { unwrap_unchecked(parent.right_kv().ok()) };
-            (false, right)
+            match parent.right_kv() {
+                Ok(right) => (false, right),
+                Err(_) => {
+                    // The underfull node has an empty parent, so it is the only child
+                    // of an empty root. It is destined to become the new root, thus
+                    // allowed to be underfull. The empty parent should be removed later
+                    // by `pop_internal_level`.
+                    return AtRoot;
+                }
+            }
         }
     };
 

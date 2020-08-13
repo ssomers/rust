@@ -166,6 +166,12 @@ impl<K, V> Root<K, V> {
         Root { node: BoxedNode::from_leaf(Box::new(unsafe { LeafNode::new() })), height: 0 }
     }
 
+    pub fn restore_from_node<'a>(
+        root_node: NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,
+    ) -> Self {
+        Root { node: unsafe { BoxedNode::from_ptr(root_node.node) }, height: root_node.height() }
+    }
+
     /// Borrows and returns an immutable reference to the node owned by the root.
     pub fn node_as_ref(&self) -> NodeRef<marker::Immut<'_>, K, V, marker::LeafOrInternal> {
         NodeRef { height: self.height, node: self.node.as_ptr(), _marker: PhantomData }
@@ -173,6 +179,11 @@ impl<K, V> Root<K, V> {
 
     /// Borrows and returns a mutable reference to the node owned by the root.
     pub fn node_as_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::LeafOrInternal> {
+        NodeRef { height: self.height, node: self.node.as_ptr(), _marker: PhantomData }
+    }
+
+    /// Converts root into a mutable reference to its node.
+    pub fn into_node_mut<'a>(self) -> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
         NodeRef { height: self.height, node: self.node.as_ptr(), _marker: PhantomData }
     }
 
@@ -205,8 +216,7 @@ impl<K, V> Root<K, V> {
     /// no cleanup is done on any of the other children.
     /// This decreases the height by 1 and is the opposite of `push_internal_level`.
     ///
-    /// Requires exclusive access to the `Root` object but not to the root node;
-    /// it will not invalidate existing handles or references to the root node.
+    /// Requires exclusive access to the `Root` object and to the root node.
     ///
     /// Panics if there is no internal level, i.e., if the root node is a leaf.
     pub fn pop_internal_level(&mut self) {
@@ -220,9 +230,8 @@ impl<K, V> Root<K, V> {
             )
         };
         self.height -= 1;
-        unsafe {
-            (*self.node_as_mut().as_leaf_mut()).parent = ptr::null();
-        }
+        let root_node = unsafe { &mut *self.node_as_mut().as_leaf_mut() };
+        root_node.parent = ptr::null();
 
         unsafe {
             Global.dealloc(NonNull::from(top).cast(), Layout::new::<InternalNode<K, V>>());
