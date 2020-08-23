@@ -1288,7 +1288,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
             let front = root.into_node_mut().first_leaf_edge();
             DrainFilterInner {
                 dormant_map: Some(dormant_map),
-                position: Some(DrainFilterPosition::Edge(front)),
+                position: DrainFilterPosition::Edge(front),
                 height,
                 length,
                 remaining: length,
@@ -1296,7 +1296,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
         } else {
             DrainFilterInner {
                 dormant_map: None,
-                position: None,
+                position: DrainFilterPosition::None,
                 height: 0,
                 length: 0,
                 remaining: 0,
@@ -1688,12 +1688,14 @@ pub(super) struct DrainFilterInner<'a, K: 'a, V: 'a> {
     // wrapped in an Option to be able to `take` it in the drop handler.
     dormant_map: Option<DormantMutRef<'a, BTreeMap<K, V>>>,
     // wrapped in an Option some maps don't have any:
-    position: Option<DrainFilterPosition<'a, K, V>>,
+    position: DrainFilterPosition<'a, K, V>,
     height: usize,
     length: usize,
     remaining: usize,
 }
 enum DrainFilterPosition<'a, K: 'a, V: 'a> {
+    // There is nothing to position on (or BTreeMap's own code panicked).
+    None,
     // Initial and normal position on a leaf edge.
     Edge(Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>),
     // Intermediate position on a KV, that sticks around if a predicate panics.
@@ -1743,17 +1745,17 @@ where
 impl<K, V> Drop for DrainFilterInner<'_, K, V> {
     fn drop(&mut self) {
         if let Some(dormant_map) = self.dormant_map.take() {
-            let root_node = match self.position.take() {
-                None => unreachable!(),
-                Some(DrainFilterPosition::Edge(edge)) => {
+            let root_node = match mem::replace(&mut self.position, DrainFilterPosition::None) {
+                DrainFilterPosition::None => unreachable!(),
+                DrainFilterPosition::Edge(edge) => {
                     // panic during drop
                     edge.into_node().forget_type().root_node()
                 }
-                Some(DrainFilterPosition::KV(kv)) => {
+                DrainFilterPosition::KV(kv) => {
                     // panic in predicate
                     kv.into_node().root_node()
                 }
-                Some(DrainFilterPosition::Root(root_node)) => root_node,
+                DrainFilterPosition::Root(root_node) => root_node,
             };
             let mut root = node::Root::restore_from_node(root_node);
             for _ in self.height..root.height() {
@@ -1771,7 +1773,7 @@ impl<K, V> Drop for DrainFilterInner<'_, K, V> {
 impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     /// Allow Debug implementations to predict the next element.
     pub(super) fn peek(&self) -> Option<(&K, &V)> {
-        if let Some(DrainFilterPosition::Edge(edge)) = self.position.as_ref() {
+        if let DrainFilterPosition::Edge(edge) = &self.position {
             edge.reborrow().next_kv().ok().map(|kv| kv.into_kv())
         } else {
             None
@@ -1783,41 +1785,33 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
-        let mut cur_leaf_edge = match self.position.take() {
-            None => return None,
-            Some(DrainFilterPosition::Root(root_node)) => {
-                self.position = Some(DrainFilterPosition::Root(root_node));
-                return None;
-            }
-            Some(DrainFilterPosition::KV(kv)) => {
-                self.position = Some(DrainFilterPosition::KV(kv));
-                return None;
-            }
-            Some(DrainFilterPosition::Edge(edge)) => edge,
+        if !matches!(&self.position, DrainFilterPosition::Edge(_)) {
+            return None;
+        }
+        let mut cur_leaf_edge = match mem::replace(&mut self.position, DrainFilterPosition::None) {
+            DrainFilterPosition::Edge(edge) => edge,
+            _ => unreachable!(),
         };
 
         loop {
             match cur_leaf_edge.next_kv() {
                 Err(root_node) => {
-                    self.position = Some(DrainFilterPosition::Root(root_node));
+                    self.position = DrainFilterPosition::Root(root_node);
                     return None;
                 }
                 Ok(kv) => {
                     self.remaining -= 1;
                     // Store the intermediate position in case the predicate panics.
-                    self.position = Some(DrainFilterPosition::KV(kv));
-                    let drain = self
-                        .position
-                        .as_mut()
-                        .map(|pos| match pos {
-                            DrainFilterPosition::KV(kv) => {
-                                let (k, v) = kv.kv_mut();
-                                pred(k, v)
-                            }
-                            _ => unreachable!(),
-                        })
-                        .unwrap();
-                    let kv = if let Some(DrainFilterPosition::KV(kv)) = self.position.take() {
+                    self.position = DrainFilterPosition::KV(kv);
+                    let drain = if let DrainFilterPosition::KV(kv) = &mut self.position {
+                        let (k, v) = kv.kv_mut();
+                        pred(k, v)
+                    } else {
+                        unreachable!()
+                    };
+                    let kv = if let DrainFilterPosition::KV(kv) =
+                        mem::replace(&mut self.position, DrainFilterPosition::None)
+                    {
                         kv
                     } else {
                         unreachable!()
@@ -1827,7 +1821,7 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
                         let (kv, pos) = kv.remove_kv_tracking(|emptied_internal_node| {
                             self.height = emptied_internal_node.height() - 1
                         });
-                        self.position = Some(DrainFilterPosition::Edge(pos));
+                        self.position = DrainFilterPosition::Edge(pos);
                         return Some(kv);
                     }
                     cur_leaf_edge = kv.next_leaf_edge();
