@@ -49,7 +49,7 @@ impl<K, V> BTreeMap<K, V> {
         K: Copy + Debug + Ord,
     {
         if let Some(root) = &self.root {
-            let root_node = root.node_as_ref();
+            let root_node = root.reborrow();
 
             assert!(root_node.ascend().is_err());
             root_node.assert_back_pointers();
@@ -74,7 +74,7 @@ impl<K, V> BTreeMap<K, V> {
         K: Debug,
     {
         if let Some(root) = self.root.as_ref() {
-            root.node_as_ref().dump_keys()
+            root.reborrow().dump_keys()
         } else {
             String::from("not yet allocated")
         }
