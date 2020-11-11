@@ -1,7 +1,7 @@
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 
-use super::node::{marker, ForceResult::*, Handle, NodeRef};
+use super::node::{marker, ForceResult::*, Handle, NodeRef, NodeTypeTrait};
 
 use SearchResult::*;
 
@@ -45,6 +45,7 @@ pub fn search_node<BorrowType, K, V, Type, Q: ?Sized>(
     key: &Q,
 ) -> SearchResult<BorrowType, K, V, Type, Type>
 where
+    Type: NodeTypeTrait,
     Q: Ord,
     K: Borrow<Q>,
 {
@@ -64,6 +65,7 @@ fn search_linear<BorrowType, K, V, Type, Q: ?Sized>(
     key: &Q,
 ) -> (usize, bool)
 where
+    Type: NodeTypeTrait,
     Q: Ord,
     K: Borrow<Q>,
 {

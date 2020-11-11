@@ -1665,7 +1665,8 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
-        while let Ok(mut kv) = self.cur_leaf_edge.take()?.next_kv() {
+        while let Ok(kv) = self.cur_leaf_edge.take()?.next_kv() {
+            let mut kv = kv.forget_node_type();
             let (k, v) = kv.kv_mut();
             if pred(k, v) {
                 *self.length -= 1;

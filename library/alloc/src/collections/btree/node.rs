@@ -150,7 +150,10 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
     }
 }
 
-impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
+impl<K, V, Type> NodeRef<marker::Owned, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     fn from_new_internal(internal: Box<InternalNode<K, V>>, height: usize) -> Self {
         NodeRef { height, node: NonNull::from(Box::leak(internal)).cast(), _marker: PhantomData }
     }
@@ -183,7 +186,8 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     pub fn push_internal_level(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
         let mut new_node = Box::new(unsafe { InternalNode::new() });
         new_node.edges[0].write(BoxedNode::from_owned(self.node));
-        let mut new_root = NodeRef::from_new_internal(new_node, self.height + 1);
+        let mut new_root: NodeRef<_, K, V, marker::Internal> =
+            NodeRef::from_new_internal(new_node, self.height + 1);
         new_root.borrow_mut().first_edge().correct_parent_link();
         *self = new_root.forget_type();
 
@@ -205,7 +209,8 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
 
         let top = self.node;
 
-        let internal_node = NodeRef { height: self.height, node: top, _marker: PhantomData };
+        let internal_node: NodeRef<_, K, V, marker::Internal> =
+            NodeRef { height: self.height, node: top, _marker: PhantomData };
         *self = internal_node.first_edge().descend();
         self.borrow_mut().clear_parent_link();
 
@@ -289,14 +294,17 @@ unsafe impl<'a, K: Send + 'a, V: Send + 'a, Type> Send for NodeRef<marker::Mut<'
 unsafe impl<'a, K: Send + 'a, V: Send + 'a, Type> Send for NodeRef<marker::ValMut<'a>, K, V, Type> {}
 unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Owned, K, V, Type> {}
 
-impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// Unpack a node reference that was packed by `Root::into_boxed_node`.
     fn from_boxed_node(boxed_node: BoxedNode<K, V>, height: usize) -> Self {
         NodeRef { height, node: boxed_node.as_ptr(), _marker: PhantomData }
     }
 }
 
-impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Unpack a node reference that was packed as `NodeRef::parent`.
     fn from_internal(node: NonNull<InternalNode<K, V>>, height: usize) -> Self {
         debug_assert!(height > 0);
@@ -304,7 +312,10 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
     }
 }
 
-impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Exposes the data of an internal node.
     ///
     /// Returns a raw ptr to avoid invalidating other references to this node.
@@ -314,7 +325,10 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
     }
 }
 
-impl<'a, K, V> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
+impl<'a, K, V, Type> NodeRef<marker::Immut<'a>, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Exposes the data of an internal node in an immutable tree.
     fn as_internal(this: &Self) -> &'a InternalNode<K, V> {
         let ptr = Self::as_internal_ptr(this);
@@ -323,7 +337,10 @@ impl<'a, K, V> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Offers exclusive access to the data of an internal node.
     fn as_internal_mut(this: &mut Self) -> &'a mut InternalNode<K, V> {
         let ptr = Self::as_internal_ptr(this);
@@ -331,7 +348,10 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
+where
+    Type: NodeTypeTrait,
+{
     /// Finds the length of the node. This is the number of keys or values.
     /// The number of edges is `len() + 1`.
     /// Note that, despite being safe, calling this function can have the side effect
@@ -364,7 +384,7 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Immut<'a>, K, V, Type> {
     /// Exposes one of the keys stored in the node.
     ///
     /// # Safety
@@ -395,7 +415,7 @@ impl<'a, K, V> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
+impl<BorrowType, K, V, Type: NodeTypeTrait> NodeRef<BorrowType, K, V, Type> {
     /// Finds the parent of the current node. Returns `Ok(handle)` if the current
     /// node actually has a parent, where `handle` points to the edge of the parent
     /// that points to the current node. Returns `Err(self)` if the current node has
@@ -405,7 +425,10 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// both, upon success, do nothing.
     pub fn ascend(
         self,
-    ) -> Result<Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::Edge>, Self> {
+    ) -> Result<
+        Handle<NodeRef<BorrowType, K, V, <Type as NodeTypeTrait>::ParentType>, marker::Edge>,
+        Self,
+    > {
         // We need to use raw pointers to nodes because, if BorrowType is marker::ValMut,
         // there might be outstanding mutable references to values that we must not invalidate.
         let leaf_ptr: *const _ = Self::as_leaf_ptr(&self);
@@ -443,7 +466,7 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Immut<'a>, K, V, Type> {
     /// Exposes the leaf portion of any leaf or internal node in an immutable tree.
     fn as_leaf(this: &Self) -> &'a LeafNode<K, V> {
         let ptr = Self::as_leaf_ptr(this);
@@ -476,7 +499,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     }
 }
 
-impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+impl<'a, K, V, Type: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Unsafely asserts to the compiler the static information that this node is a `Leaf`.
     unsafe fn cast_to_leaf_unchecked(self) -> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
         debug_assert!(self.height == 0);
@@ -511,7 +534,7 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Offers exclusive access to a part of the key storage area.
     ///
     /// # Safety
@@ -542,7 +565,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Immut<'a>, K, V, Type> {
     /// Exposes the entire key storage area in the node,
     /// regardless of the node's current length,
     /// having exclusive access to the entire node.
@@ -558,7 +581,10 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
+impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Exposes the entire storage area for edge contents in the node,
     /// regardless of the node's current length,
     /// having exclusive access to the entire node.
@@ -567,7 +593,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Offers exclusive access to a sized slice of key storage area in the node.
     unsafe fn into_key_area_slice(mut self) -> &'a mut [MaybeUninit<K>] {
         let len = self.len();
@@ -587,7 +613,10 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Offers exclusive access to a sized slice of storage area for edge contents in the node.
     unsafe fn into_edge_area_slice(mut self) -> &'a mut [MaybeUninit<BoxedNode<K, V>>] {
         let len = self.len();
@@ -598,7 +627,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
+impl<'a, K, V, Type: NodeTypeTrait> NodeRef<marker::ValMut<'a>, K, V, Type> {
     /// # Safety
     /// - The node has more than `idx` initialized elements.
     /// - The keys and values of the node must be initialized up to its current length.
@@ -618,14 +647,14 @@ impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Exposes exclusive access to the length of the node.
     pub fn into_len_mut(mut self) -> &'a mut u16 {
         &mut (*Self::as_leaf_mut(&mut self)).len
     }
 }
 
-impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Set or clear the node's link to its parent edge,
     /// without invalidating other references to the node.
     fn set_parent_link(&mut self, parent: NonNull<InternalNode<K, V>>, parent_idx: usize) {
@@ -667,7 +696,11 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
     }
 }
 
-impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+    Type: NodeTypeTrait<ChildType: NodeTypeTrait>,
+{
     /// # Safety
     /// Every item returned by `range` is a valid edge index for the node.
     unsafe fn correct_childrens_parent_links<R: Iterator<Item = usize>>(&mut self, range: R) {
@@ -779,7 +812,9 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
             (key, val, edge)
         }
     }
+}
 
+impl<'a, K: 'a, V: 'a, Type: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, Type> {
     fn into_kv_pointers_mut(mut self) -> (*mut K, *mut V) {
         let leaf = Self::as_leaf_mut(&mut self);
         let keys = MaybeUninit::slice_as_mut_ptr(&mut leaf.keys);
@@ -847,7 +882,9 @@ impl<Node, Type> Handle<Node, Type> {
     }
 }
 
-impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV> {
+impl<BorrowType, K, V, NodeType: NodeTypeTrait>
+    Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV>
+{
     /// Creates a new handle to a key/value pair in `node`.
     /// Unsafe because the caller must ensure that `idx < node.len()`.
     pub unsafe fn new_kv(node: NodeRef<BorrowType, K, V, NodeType>, idx: usize) -> Self {
@@ -865,7 +902,7 @@ impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, mar
     }
 }
 
-impl<BorrowType, K, V, NodeType> NodeRef<BorrowType, K, V, NodeType> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// Could be a public implementation of PartialEq, but only used in this module.
     fn eq(&self, other: &Self) -> bool {
         let Self { node, height, _marker: _ } = self;
@@ -896,8 +933,9 @@ impl<BorrowType, K, V, NodeType, HandleType> PartialOrd
     }
 }
 
-impl<BorrowType, K, V, NodeType, HandleType>
-    Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
+impl<BorrowType, K, V, NodeType, HandleType> Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
+where
+    NodeType: NodeTypeTrait,
 {
     /// Temporarily takes out another, immutable handle on the same location.
     pub fn reborrow(&self) -> Handle<NodeRef<marker::Immut<'_>, K, V, NodeType>, HandleType> {
@@ -906,7 +944,10 @@ impl<BorrowType, K, V, NodeType, HandleType>
     }
 }
 
-impl<'a, K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, HandleType> {
+impl<'a, K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, HandleType>
+where
+    NodeType: NodeTypeTrait,
+{
     /// Unsafely asserts to the compiler the static information that the handle's node is a `Leaf`.
     pub unsafe fn cast_to_leaf_unchecked(
         self,
@@ -928,7 +969,10 @@ impl<'a, K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeT
     }
 }
 
-impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge> {
+impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge>
+where
+    NodeType: NodeTypeTrait,
+{
     /// Creates a new handle to an edge in `node`.
     /// Unsafe because the caller must ensure that `idx <= node.len()`.
     pub unsafe fn new_edge(node: NodeRef<BorrowType, K, V, NodeType>, idx: usize) -> Self {
@@ -1022,7 +1066,11 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     }
 }
 
-impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge> {
+impl<'a, K, V, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::Edge>
+where
+    NodeType: NodeTypeTrait<IsInternal = ()>,
+    NodeType: NodeTypeTrait<ChildType: NodeTypeTrait>,
+{
     /// Fixes the parent pointer and index in the child node below this edge. This is useful
     /// when the ordering of edges has been changed, such as in the various `insert` methods.
     fn correct_parent_link(self) {
@@ -1034,7 +1082,11 @@ impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::
     }
 }
 
-impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge> {
+impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::Edge>
+where
+    NodeType: NodeTypeTrait<IsInternal = ()>,
+    NodeType: NodeTypeTrait<ChildType: NodeTypeTrait>,
+{
     /// Inserts a new key/value pair and an edge that will go to the right of that new pair
     /// between this edge and the key/value pair to the right of this edge. This method assumes
     /// that there is enough space in the node for the new pair to fit.
@@ -1056,12 +1108,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// Inserts a new key/value pair and an edge that will go to the right of that new pair
     /// between this edge and the key/value pair to the right of this edge. This method splits
     /// the node if there isn't enough room.
-    fn insert(
-        mut self,
-        key: K,
-        val: V,
-        edge: Root<K, V>,
-    ) -> InsertResult<'a, K, V, marker::Internal> {
+    fn insert(mut self, key: K, val: V, edge: Root<K, V>) -> InsertResult<'a, K, V, NodeType> {
         assert!(edge.height == self.node.height - 1);
 
         if self.node.len() < CAPACITY {
@@ -1122,12 +1169,15 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     }
 }
 
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::Edge> {
+impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge>
+where
+    NodeType: NodeTypeTrait<IsInternal = ()>,
+{
     /// Finds the node pointed to by this edge.
     ///
     /// `edge.descend().ascend().unwrap()` and `node.ascend().unwrap().descend()` should
     /// both, upon success, do nothing.
-    pub fn descend(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+    pub fn descend(self) -> NodeRef<BorrowType, K, V, NodeType::ChildType> {
         // We need to use raw pointers to nodes because, if BorrowType is
         // marker::ValMut, there might be outstanding mutable references to
         // values that we must not invalidate. There's no worry accessing the
@@ -1141,13 +1191,17 @@ impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marke
     }
 }
 
-impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Immut<'a>, K, V, NodeType>, marker::KV> {
+impl<'a, K: 'a, V: 'a, NodeType: NodeTypeTrait>
+    Handle<NodeRef<marker::Immut<'a>, K, V, NodeType>, marker::KV>
+{
     pub fn into_kv(self) -> (&'a K, &'a V) {
         (unsafe { self.node.key_at(self.idx) }, unsafe { self.node.val_at(self.idx) })
     }
 }
 
-impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV> {
+impl<'a, K: 'a, V: 'a, NodeType: NodeTypeTrait>
+    Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV>
+{
     pub fn into_key_mut(self) -> &'a mut K {
         unsafe { self.node.into_key_area_mut_at(self.idx).assume_init_mut() }
     }
@@ -1157,13 +1211,17 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
     }
 }
 
-impl<'a, K, V, NodeType> Handle<NodeRef<marker::ValMut<'a>, K, V, NodeType>, marker::KV> {
+impl<'a, K, V, NodeType: NodeTypeTrait>
+    Handle<NodeRef<marker::ValMut<'a>, K, V, NodeType>, marker::KV>
+{
     pub fn into_kv_valmut(self) -> (&'a K, &'a mut V) {
         unsafe { self.node.into_key_val_mut_at(self.idx) }
     }
 }
 
-impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV> {
+impl<'a, K: 'a, V: 'a, NodeType: NodeTypeTrait>
+    Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV>
+{
     pub fn kv_mut(&mut self) -> (&mut K, &mut V) {
         // We cannot call separate key and value methods, because calling the second one
         // invalidates the reference returned by the first.
@@ -1176,7 +1234,9 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
     }
 }
 
-impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV> {
+impl<'a, K: 'a, V: 'a, NodeType: NodeTypeTrait>
+    Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV>
+{
     /// Helps implementations of `split` for a particular `NodeType`,
     /// by calculating the length of the new node.
     fn split_new_node_len(&self) -> usize {
@@ -1243,7 +1303,11 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     }
 }
 
-impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::KV> {
+impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV>
+where
+    NodeType: NodeTypeTrait<IsInternal = ()>,
+    NodeType: NodeTypeTrait<ChildType: NodeTypeTrait>,
+{
     /// Splits the underlying node into three parts:
     ///
     /// - The node is truncated to only contain the edges and key/value pairs to the
@@ -1251,7 +1315,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// - The key and value pointed to by this handle are extracted.
     /// - All the edges and key/value pairs to the right of this handle are put into
     ///   a newly allocated node.
-    pub fn split(mut self) -> SplitResult<'a, K, V, marker::Internal> {
+    pub fn split(mut self) -> SplitResult<'a, K, V, NodeType> {
         unsafe {
             let mut new_node = Box::new(InternalNode::new());
             let new_len = self.split_new_node_len();
@@ -1275,14 +1339,14 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
 
 /// Represents a session for evaluating and performing a balancing operation
 /// around an internal key/value pair.
-pub struct BalancingContext<'a, K, V> {
-    parent: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::KV>,
-    left_child: NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,
-    right_child: NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,
+pub struct BalancingContext<'a, K, V, ChildType: NodeTypeTrait> {
+    parent: Handle<NodeRef<marker::Mut<'a>, K, V, ChildType::ParentType>, marker::KV>,
+    left_child: NodeRef<marker::Mut<'a>, K, V, ChildType>,
+    right_child: NodeRef<marker::Mut<'a>, K, V, ChildType>,
 }
 
 impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::KV> {
-    pub fn consider_for_balancing(self) -> BalancingContext<'a, K, V> {
+    pub fn consider_for_balancing(self) -> BalancingContext<'a, K, V, marker::LeafOrInternal> {
         let self1 = unsafe { ptr::read(&self) };
         let self2 = unsafe { ptr::read(&self) };
         BalancingContext {
@@ -1293,7 +1357,7 @@ impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::
     }
 }
 
-impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
+impl<'a, K, V, ChildType: NodeTypeTrait> NodeRef<marker::Mut<'a>, K, V, ChildType> {
     /// Chooses a balancing context involving the node as a child, thus between
     /// the KV immediately to the left or to the right in the parent node.
     /// Returns an `Err` if there is no parent.
@@ -1306,7 +1370,12 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     /// typically faster, since we only need to shift the node's N elements to
     /// the right, instead of shifting at least N of the sibling's elements to
     /// the left.
-    pub fn choose_parent_kv(self) -> Result<LeftOrRight<BalancingContext<'a, K, V>>, Self> {
+    pub fn choose_parent_kv(
+        self,
+    ) -> Result<LeftOrRight<BalancingContext<'a, K, V, ChildType>>, Self>
+    where
+        ChildType::ParentType: NodeTypeTrait<ChildType = ChildType>,
+    {
         match unsafe { ptr::read(&self) }.ascend() {
             Ok(parent) => match parent.left_kv() {
                 Ok(left_parent_kv) => Ok(LeftOrRight::Left(BalancingContext {
@@ -1328,7 +1397,7 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     }
 }
 
-impl<'a, K, V> BalancingContext<'a, K, V> {
+impl<'a, K, V, ChildType: NodeTypeTrait> BalancingContext<'a, K, V, ChildType> {
     pub fn left_child_len(&self) -> usize {
         self.left_child.len()
     }
@@ -1337,11 +1406,11 @@ impl<'a, K, V> BalancingContext<'a, K, V> {
         self.right_child.len()
     }
 
-    pub fn into_left_child(self) -> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
+    pub fn into_left_child(self) -> NodeRef<marker::Mut<'a>, K, V, ChildType> {
         self.left_child
     }
 
-    pub fn into_right_child(self) -> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
+    pub fn into_right_child(self) -> NodeRef<marker::Mut<'a>, K, V, ChildType> {
         self.right_child
     }
 
@@ -1353,7 +1422,12 @@ impl<'a, K, V> BalancingContext<'a, K, V> {
     }
 }
 
-impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
+impl<'a, K: 'a, V: 'a, ChildType> BalancingContext<'a, K, V, ChildType>
+where
+    ChildType: NodeTypeTrait,
+    ChildType::ParentType: NodeTypeTrait<IsInternal = ()>,
+    ChildType::ParentType: NodeTypeTrait<ChildType: NodeTypeTrait>,
+{
     /// Merges the parent's key/value pair and both adjacent child nodes into
     /// the left node and returns an edge handle in that expanded left node.
     /// If `track_edge_idx` is given some value, the returned edge corresponds
@@ -1363,7 +1437,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     pub fn merge(
         mut self,
         track_edge_idx: Option<LeftOrRight<usize>>,
-    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
+    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, ChildType>, marker::Edge> {
         let mut left_node = self.left_child;
         let left_len = left_node.len();
         let right_node = self.right_child;
@@ -1443,14 +1517,14 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     pub fn steal_left(
         mut self,
         track_right_edge_idx: usize,
-    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
+    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, ChildType>, marker::Edge> {
         unsafe {
-            let (k, v, edge) = self.left_child.pop();
+            let (k, v, edge) = self.left_child.forget_type().pop();
 
             let k = mem::replace(self.parent.kv_mut().0, k);
             let v = mem::replace(self.parent.kv_mut().1, v);
 
-            match self.right_child.reborrow_mut().force() {
+            match self.right_child.reborrow_mut().forget_type().force() {
                 ForceResult::Leaf(mut leaf) => leaf.push_front(k, v),
                 ForceResult::Internal(mut internal) => internal.push_front(k, v, edge.unwrap()),
             }
@@ -1466,14 +1540,14 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     pub fn steal_right(
         mut self,
         track_left_edge_idx: usize,
-    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
+    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, ChildType>, marker::Edge> {
         unsafe {
-            let (k, v, edge) = self.right_child.pop_front();
+            let (k, v, edge) = self.right_child.forget_type().pop_front();
 
             let k = mem::replace(self.parent.kv_mut().0, k);
             let v = mem::replace(self.parent.kv_mut().1, v);
 
-            match self.left_child.reborrow_mut().force() {
+            match self.left_child.reborrow_mut().forget_type().force() {
                 ForceResult::Leaf(mut leaf) => leaf.push(k, v),
                 ForceResult::Internal(mut internal) => internal.push(k, v, edge.unwrap()),
             }
@@ -1522,7 +1596,10 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             *left_node.reborrow_mut().into_len_mut() -= count as u16;
             *right_node.reborrow_mut().into_len_mut() += count as u16;
 
-            match (left_node.reborrow_mut().force(), right_node.reborrow_mut().force()) {
+            match (
+                left_node.reborrow_mut().forget_type().force(),
+                right_node.reborrow_mut().forget_type().force(),
+            ) {
                 (ForceResult::Internal(left), ForceResult::Internal(mut right)) => {
                     // Make room for stolen edges.
                     let left = left.reborrow();
@@ -1578,7 +1655,10 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             *left_node.reborrow_mut().into_len_mut() += count as u16;
             *right_node.reborrow_mut().into_len_mut() -= count as u16;
 
-            match (left_node.reborrow_mut().force(), right_node.reborrow_mut().force()) {
+            match (
+                left_node.reborrow_mut().forget_type().force(),
+                right_node.reborrow_mut().forget_type().force(),
+            ) {
                 (ForceResult::Internal(left), ForceResult::Internal(mut right)) => {
                     move_edges(right.reborrow(), 0, left, left_len + 1, count);
 
@@ -1623,49 +1703,33 @@ unsafe fn move_edges<'a, K: 'a, V: 'a>(
     }
 }
 
-impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Leaf> {
-    /// Removes any static information asserting that this node is a `Leaf` node.
+impl<BorrowType, K, V, Type: NodeTypeTrait> NodeRef<BorrowType, K, V, Type> {
+    /// Removes any static information about the type of node.
     pub fn forget_type(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+        NodeRef { height: self.height, node: self.node, _marker: PhantomData }
+    }
+
+    /// Removes some static information about the type of node.
+    pub fn relax_type<ToType: NodeTypeTrait>(self) -> NodeRef<BorrowType, K, V, ToType> {
         NodeRef { height: self.height, node: self.node, _marker: PhantomData }
     }
 }
 
-impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
-    /// Removes any static information asserting that this node is an `Internal` node.
-    pub fn forget_type(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
-        NodeRef { height: self.height, node: self.node, _marker: PhantomData }
-    }
-}
-
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge> {
+impl<BorrowType, K, V, NodeType: NodeTypeTrait, HandleType>
+    Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
+{
     pub fn forget_node_type(
         self,
-    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::Edge> {
-        unsafe { Handle::new_edge(self.node.forget_type(), self.idx) }
+    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, HandleType> {
+        // We can't use Handle::new_kv or Handle::new_edge because we don't know our type
+        Handle { node: self.node.forget_type(), idx: self.idx, _marker: PhantomData }
     }
-}
 
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::Edge> {
-    pub fn forget_node_type(
+    pub fn relax_node_type<ToType: NodeTypeTrait>(
         self,
-    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::Edge> {
-        unsafe { Handle::new_edge(self.node.forget_type(), self.idx) }
-    }
-}
-
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::KV> {
-    pub fn forget_node_type(
-        self,
-    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV> {
-        unsafe { Handle::new_kv(self.node.forget_type(), self.idx) }
-    }
-}
-
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::KV> {
-    pub fn forget_node_type(
-        self,
-    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV> {
-        unsafe { Handle::new_kv(self.node.forget_type(), self.idx) }
+    ) -> Handle<NodeRef<BorrowType, K, V, ToType>, HandleType> {
+        // We can't use Handle::new_kv or Handle::new_edge because we don't know our type
+        Handle { node: self.node.relax_type(), idx: self.idx, _marker: PhantomData }
     }
 }
 
@@ -1761,11 +1825,56 @@ pub enum InsertResult<'a, K, V, NodeType> {
     Split(SplitResult<'a, K, V, NodeType>),
 }
 
+pub trait NodeTypeTrait {
+    type RelaxedType: NodeTypeTrait;
+    type SelfOrParentType: NodeTypeTrait;
+    type ParentType: NodeTypeTrait<IsInternal = ()>;
+    type ChildType;
+    type IsInternal; // type unit means true, type never means false
+}
+impl NodeTypeTrait for marker::Leaf {
+    type RelaxedType = marker::LeafOrInternal;
+    type SelfOrParentType = marker::LeafOrInternal;
+    type ParentType = marker::BarelyInternal;
+    type ChildType = !;
+    type IsInternal = !;
+}
+impl NodeTypeTrait for marker::Internal {
+    type RelaxedType = marker::Internal;
+    type SelfOrParentType = marker::Internal;
+    type ParentType = marker::TrulyInternal;
+    type ChildType = marker::LeafOrInternal;
+    type IsInternal = ();
+}
+impl NodeTypeTrait for marker::BarelyInternal {
+    type RelaxedType = marker::Internal;
+    type SelfOrParentType = marker::Internal;
+    type ParentType = marker::TrulyInternal;
+    type ChildType = marker::Leaf;
+    type IsInternal = ();
+}
+impl NodeTypeTrait for marker::TrulyInternal {
+    type RelaxedType = marker::Internal;
+    type SelfOrParentType = marker::TrulyInternal;
+    type ParentType = marker::TrulyInternal;
+    type ChildType = marker::Internal;
+    type IsInternal = ();
+}
+impl NodeTypeTrait for marker::LeafOrInternal {
+    type RelaxedType = marker::LeafOrInternal;
+    type SelfOrParentType = marker::LeafOrInternal;
+    type ParentType = marker::Internal;
+    type ChildType = !;
+    type IsInternal = !;
+}
+
 pub mod marker {
     use core::marker::PhantomData;
 
     pub enum Leaf {}
     pub enum Internal {}
+    pub enum BarelyInternal {}
+    pub enum TrulyInternal {}
     pub enum LeafOrInternal {}
 
     pub enum Owned {}

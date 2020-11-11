@@ -4,7 +4,7 @@ use core::ops::Bound::{Excluded, Included, Unbounded};
 use core::ops::RangeBounds;
 use core::ptr;
 
-use super::node::{marker, ForceResult::*, Handle, NodeRef};
+use super::node::{marker, ForceResult::*, Handle, NodeRef, NodeTypeTrait};
 use super::search::{self, SearchResult};
 use super::unwrap_unchecked;
 
@@ -203,66 +203,49 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     }
 }
 
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge> {
-    /// Given a leaf edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
-    /// on the right side, which is either in the same leaf node or in an ancestor node.
-    /// If the leaf edge is the last one in the tree, returns [`Result::Err`] with the root node.
+impl<BorrowType, K, V, NodeType, KvType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge>
+where
+    NodeType: NodeTypeTrait<SelfOrParentType = KvType>,
+    KvType: NodeTypeTrait,
+{
+    /// Given an edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
+    /// on the right side, which is either in the same node or in an ancestor node.
+    /// If the edge is the last one in the tree, returns [`Result::Err`] with the root node.
     pub fn next_kv(
         self,
     ) -> Result<
-        Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV>,
-        NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
+        Handle<NodeRef<BorrowType, K, V, KvType>, marker::KV>,
+        NodeRef<BorrowType, K, V, KvType>,
     > {
-        let mut edge = self.forget_node_type();
+        let mut edge: Handle<NodeRef<BorrowType, K, V, KvType>, marker::Edge> =
+            self.relax_node_type();
         loop {
             edge = match edge.right_kv() {
                 Ok(kv) => return Ok(kv),
                 Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge.forget_node_type(),
+                    Ok(parent_edge) => parent_edge.relax_node_type(),
                     Err(root) => return Err(root),
                 },
             }
         }
     }
 
-    /// Given a leaf edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
-    /// on the left side, which is either in the same leaf node or in an ancestor node.
-    /// If the leaf edge is the first one in the tree, returns [`Result::Err`] with the root node.
+    /// Given an edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
+    /// on the left side, which is either in the same node or in an ancestor node.
+    /// If the edge is the first one in the tree, returns [`Result::Err`] with the root node.
     pub fn next_back_kv(
         self,
     ) -> Result<
-        Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV>,
-        NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
+        Handle<NodeRef<BorrowType, K, V, KvType>, marker::KV>,
+        NodeRef<BorrowType, K, V, KvType>,
     > {
-        let mut edge = self.forget_node_type();
+        let mut edge: Handle<NodeRef<BorrowType, K, V, KvType>, marker::Edge> =
+            self.relax_node_type();
         loop {
             edge = match edge.left_kv() {
                 Ok(kv) => return Ok(kv),
                 Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge.forget_node_type(),
-                    Err(root) => return Err(root),
-                },
-            }
-        }
-    }
-}
-
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::Edge> {
-    /// Given an internal edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
-    /// on the right side, which is either in the same internal node or in an ancestor node.
-    /// If the internal edge is the last one in the tree, returns [`Result::Err`] with the root node.
-    pub fn next_kv(
-        self,
-    ) -> Result<
-        Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::KV>,
-        NodeRef<BorrowType, K, V, marker::Internal>,
-    > {
-        let mut edge = self;
-        loop {
-            edge = match edge.right_kv() {
-                Ok(internal_kv) => return Ok(internal_kv),
-                Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge,
+                    Ok(parent_edge) => parent_edge.relax_node_type(),
                     Err(root) => return Err(root),
                 },
             }

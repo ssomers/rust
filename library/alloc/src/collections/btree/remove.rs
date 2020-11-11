@@ -1,5 +1,5 @@
 use super::map::MIN_LEN;
-use super::node::{marker, ForceResult::*, Handle, LeftOrRight::*, NodeRef};
+use super::node::{marker, ForceResult::*, Handle, LeftOrRight::*, NodeRef, NodeTypeTrait};
 use super::unwrap_unchecked;
 use core::mem;
 
@@ -91,7 +91,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     }
 }
 
-impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type>
+where
+    Type: NodeTypeTrait<IsInternal = ()>,
+{
     /// Stocks up a possibly underfull internal node, recursively.
     /// Climbs up until it reaches an ancestor that has elements to spare or the root.
     fn handle_shrunk_node_recursively<F: FnOnce()>(mut self, handle_emptied_internal_root: F) {
@@ -107,7 +110,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
                 }
                 1..MIN_LEN => {
                     if let Some(parent) = self.handle_underfull_node_locally() {
-                        parent
+                        parent.relax_type()
                     } else {
                         return;
                     }
