@@ -1657,7 +1657,7 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     /// Allow Debug implementations to predict the next element.
     pub(super) fn peek(&self) -> Option<(&K, &V)> {
         let edge = self.cur_leaf_edge.as_ref()?;
-        edge.reborrow().next_kv().ok().map(Handle::into_kv)
+        edge.reborrow().forget_node_type().next_kv().ok().map(Handle::into_kv)
     }
 
     /// Implementation of a typical `DrainFilter::next` method, given the predicate.
@@ -1665,7 +1665,7 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
-        while let Ok(kv) = self.cur_leaf_edge.take()?.next_kv() {
+        while let Ok(kv) = self.cur_leaf_edge.take()?.forget_node_type().next_kv() {
             let mut kv = kv.forget_node_type();
             let (k, v) = kv.kv_mut();
             if pred(k, v) {

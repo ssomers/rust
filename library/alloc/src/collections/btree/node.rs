@@ -1703,33 +1703,46 @@ unsafe fn move_edges<'a, K: 'a, V: 'a>(
     }
 }
 
-impl<BorrowType, K, V, Type: NodeTypeTrait> NodeRef<BorrowType, K, V, Type> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// Removes any static information about the type of node.
-    pub fn forget_type(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+    pub fn forget_type(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal>
+    where
+        Type: NodeTypeTrait,
+    {
         NodeRef { height: self.height, node: self.node, _marker: PhantomData }
     }
 
     /// Removes some static information about the type of node.
-    pub fn relax_type<ToType: NodeTypeTrait>(self) -> NodeRef<BorrowType, K, V, ToType> {
-        NodeRef { height: self.height, node: self.node, _marker: PhantomData }
+    pub fn relax_type<FromInternalType>(this: NodeRef<BorrowType, K, V, FromInternalType>) -> Self
+    where
+        FromInternalType: NodeTypeTrait<IncludesBarelyInternal = ()>,
+        Type: NodeTypeTrait<IncludesAnyInternal = ()>,
+    {
+        NodeRef { height: this.height, node: this.node, _marker: PhantomData }
     }
 }
 
-impl<BorrowType, K, V, NodeType: NodeTypeTrait, HandleType>
+impl<BorrowType, K, V, NodeType, HandleType>
     Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
 {
     pub fn forget_node_type(
         self,
-    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, HandleType> {
+    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, HandleType>
+    where
+        NodeType: NodeTypeTrait,
+    {
         // We can't use Handle::new_kv or Handle::new_edge because we don't know our type
         Handle { node: self.node.forget_type(), idx: self.idx, _marker: PhantomData }
     }
 
-    pub fn relax_node_type<ToType: NodeTypeTrait>(
-        self,
-    ) -> Handle<NodeRef<BorrowType, K, V, ToType>, HandleType> {
+    pub fn relax_node_type(
+        this: Handle<NodeRef<BorrowType, K, V, marker::Internal>, HandleType>,
+    ) -> Self
+    where
+        NodeType: NodeTypeTrait<IncludesAnyInternal = ()>,
+    {
         // We can't use Handle::new_kv or Handle::new_edge because we don't know our type
-        Handle { node: self.node.relax_type(), idx: self.idx, _marker: PhantomData }
+        Handle { node: NodeRef::relax_type(this.node), idx: this.idx, _marker: PhantomData }
     }
 }
 
@@ -1826,46 +1839,46 @@ pub enum InsertResult<'a, K, V, NodeType> {
 }
 
 pub trait NodeTypeTrait {
-    type RelaxedType: NodeTypeTrait;
-    type SelfOrParentType: NodeTypeTrait;
     type ParentType: NodeTypeTrait<IsInternal = ()>;
     type ChildType;
     type IsInternal; // type unit means true, type never means false
+    type IncludesAnyInternal; // type unit means true, type never means false
+    type IncludesBarelyInternal; // type unit means true, type never means false
 }
 impl NodeTypeTrait for marker::Leaf {
-    type RelaxedType = marker::LeafOrInternal;
-    type SelfOrParentType = marker::LeafOrInternal;
     type ParentType = marker::BarelyInternal;
     type ChildType = !;
     type IsInternal = !;
+    type IncludesAnyInternal = !;
+    type IncludesBarelyInternal = !;
 }
 impl NodeTypeTrait for marker::Internal {
-    type RelaxedType = marker::Internal;
-    type SelfOrParentType = marker::Internal;
-    type ParentType = marker::TrulyInternal;
+    type ParentType = marker::Internal; // not TrulyInternal - don't ask
     type ChildType = marker::LeafOrInternal;
     type IsInternal = ();
+    type IncludesAnyInternal = ();
+    type IncludesBarelyInternal = ();
 }
 impl NodeTypeTrait for marker::BarelyInternal {
-    type RelaxedType = marker::Internal;
-    type SelfOrParentType = marker::Internal;
     type ParentType = marker::TrulyInternal;
     type ChildType = marker::Leaf;
     type IsInternal = ();
+    type IncludesAnyInternal = !;
+    type IncludesBarelyInternal = ();
 }
 impl NodeTypeTrait for marker::TrulyInternal {
-    type RelaxedType = marker::Internal;
-    type SelfOrParentType = marker::TrulyInternal;
     type ParentType = marker::TrulyInternal;
     type ChildType = marker::Internal;
     type IsInternal = ();
+    type IncludesAnyInternal = !;
+    type IncludesBarelyInternal = !;
 }
 impl NodeTypeTrait for marker::LeafOrInternal {
-    type RelaxedType = marker::LeafOrInternal;
-    type SelfOrParentType = marker::LeafOrInternal;
     type ParentType = marker::Internal;
     type ChildType = !;
     type IsInternal = !;
+    type IncludesAnyInternal = ();
+    type IncludesBarelyInternal = ();
 }
 
 pub mod marker {

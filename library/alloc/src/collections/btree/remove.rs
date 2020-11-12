@@ -83,7 +83,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
 
         // The internal node may have been stolen from or merged. Go back right
         // to find where the original KV ended up.
-        let mut internal = unsafe { unwrap_unchecked(left_hole.next_kv().ok()) };
+        let mut internal = unsafe { unwrap_unchecked(left_hole.forget_node_type().next_kv().ok()) };
         let old_key = mem::replace(internal.kv_mut().0, left_kv.0);
         let old_val = mem::replace(internal.kv_mut().1, left_kv.1);
         let pos = internal.next_leaf_edge();
@@ -93,24 +93,25 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
 
 impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type>
 where
-    Type: NodeTypeTrait<IsInternal = ()>,
+    Type: NodeTypeTrait<IncludesBarelyInternal = ()>,
 {
     /// Stocks up a possibly underfull internal node, recursively.
     /// Climbs up until it reaches an ancestor that has elements to spare or the root.
-    fn handle_shrunk_node_recursively<F: FnOnce()>(mut self, handle_emptied_internal_root: F) {
+    fn handle_shrunk_node_recursively<F: FnOnce()>(self, handle_emptied_internal_root: F) {
+        let mut node: NodeRef<_, K, V, marker::Internal> = NodeRef::relax_type(self);
         loop {
-            self = match self.len() {
+            node = match node.len() {
                 0 => {
                     // An empty node must be the root, because length is only
                     // reduced by one, and non-root underfull nodes are stocked up,
                     // so non-root nodes never have fewer than MIN_LEN - 1 elements.
-                    debug_assert!(self.ascend().is_err());
+                    debug_assert!(node.ascend().is_err());
                     handle_emptied_internal_root();
                     return;
                 }
                 1..MIN_LEN => {
-                    if let Some(parent) = self.handle_underfull_node_locally() {
-                        parent.relax_type()
+                    if let Some(parent) = node.handle_underfull_node_locally() {
+                        NodeRef::relax_type(parent)
                     } else {
                         return;
                     }

@@ -203,10 +203,9 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     }
 }
 
-impl<BorrowType, K, V, NodeType, KvType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge>
+impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge>
 where
-    NodeType: NodeTypeTrait<SelfOrParentType = KvType>,
-    KvType: NodeTypeTrait,
+    NodeType: NodeTypeTrait<ParentType = marker::Internal, IncludesAnyInternal = ()>,
 {
     /// Given an edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
     /// on the right side, which is either in the same node or in an ancestor node.
@@ -214,16 +213,15 @@ where
     pub fn next_kv(
         self,
     ) -> Result<
-        Handle<NodeRef<BorrowType, K, V, KvType>, marker::KV>,
-        NodeRef<BorrowType, K, V, KvType>,
+        Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV>,
+        NodeRef<BorrowType, K, V, NodeType>,
     > {
-        let mut edge: Handle<NodeRef<BorrowType, K, V, KvType>, marker::Edge> =
-            self.relax_node_type();
+        let mut edge = self;
         loop {
             edge = match edge.right_kv() {
                 Ok(kv) => return Ok(kv),
                 Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge.relax_node_type(),
+                    Ok(parent_edge) => Self::relax_node_type(parent_edge),
                     Err(root) => return Err(root),
                 },
             }
@@ -236,16 +234,15 @@ where
     pub fn next_back_kv(
         self,
     ) -> Result<
-        Handle<NodeRef<BorrowType, K, V, KvType>, marker::KV>,
-        NodeRef<BorrowType, K, V, KvType>,
+        Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV>,
+        NodeRef<BorrowType, K, V, NodeType>,
     > {
-        let mut edge: Handle<NodeRef<BorrowType, K, V, KvType>, marker::Edge> =
-            self.relax_node_type();
+        let mut edge = self;
         loop {
             edge = match edge.left_kv() {
                 Ok(kv) => return Ok(kv),
                 Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge.relax_node_type(),
+                    Ok(parent_edge) => Self::relax_node_type(parent_edge),
                     Err(root) => return Err(root),
                 },
             }
@@ -293,7 +290,7 @@ impl<'a, K, V> Handle<NodeRef<marker::Immut<'a>, K, V, marker::Leaf>, marker::Ed
     /// There must be another KV in the direction travelled.
     pub unsafe fn next_unchecked(&mut self) -> (&'a K, &'a V) {
         super::mem::replace(self, |leaf_edge| {
-            let kv = leaf_edge.next_kv();
+            let kv = leaf_edge.forget_node_type().next_kv();
             let kv = unsafe { unwrap_unchecked(kv.ok()) };
             (kv.next_leaf_edge(), kv.into_kv())
         })
@@ -306,7 +303,7 @@ impl<'a, K, V> Handle<NodeRef<marker::Immut<'a>, K, V, marker::Leaf>, marker::Ed
     /// There must be another KV in the direction travelled.
     pub unsafe fn next_back_unchecked(&mut self) -> (&'a K, &'a V) {
         super::mem::replace(self, |leaf_edge| {
-            let kv = leaf_edge.next_back_kv();
+            let kv = leaf_edge.forget_node_type().next_back_kv();
             let kv = unsafe { unwrap_unchecked(kv.ok()) };
             (kv.next_back_leaf_edge(), kv.into_kv())
         })
@@ -321,7 +318,7 @@ impl<'a, K, V> Handle<NodeRef<marker::ValMut<'a>, K, V, marker::Leaf>, marker::E
     /// There must be another KV in the direction travelled.
     pub unsafe fn next_unchecked(&mut self) -> (&'a K, &'a mut V) {
         let kv = super::mem::replace(self, |leaf_edge| {
-            let kv = leaf_edge.next_kv();
+            let kv = leaf_edge.forget_node_type().next_kv();
             let kv = unsafe { unwrap_unchecked(kv.ok()) };
             (unsafe { ptr::read(&kv) }.next_leaf_edge(), kv)
         });
@@ -336,7 +333,7 @@ impl<'a, K, V> Handle<NodeRef<marker::ValMut<'a>, K, V, marker::Leaf>, marker::E
     /// There must be another KV in the direction travelled.
     pub unsafe fn next_back_unchecked(&mut self) -> (&'a K, &'a mut V) {
         let kv = super::mem::replace(self, |leaf_edge| {
-            let kv = leaf_edge.next_back_kv();
+            let kv = leaf_edge.forget_node_type().next_back_kv();
             let kv = unsafe { unwrap_unchecked(kv.ok()) };
             (unsafe { ptr::read(&kv) }.next_back_leaf_edge(), kv)
         });
