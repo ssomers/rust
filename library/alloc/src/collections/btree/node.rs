@@ -753,12 +753,21 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
             (key, val, edge)
         }
     }
+}
 
+impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     fn into_kv_pointers_mut(mut self) -> (*mut K, *mut V) {
         let leaf = Self::as_leaf_mut(&mut self);
         let keys = MaybeUninit::slice_as_mut_ptr(&mut leaf.keys);
         let vals = MaybeUninit::slice_as_mut_ptr(&mut leaf.vals);
         (keys, vals)
+    }
+}
+
+impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+    unsafe fn into_edge_pointer_mut(mut self) -> *mut BoxedNode<K, V> {
+        let internal = Self::as_internal_mut(&mut self);
+        MaybeUninit::slice_as_mut_ptr(&mut internal.edges)
     }
 }
 
@@ -1468,6 +1477,8 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             assert!(left_len >= count);
 
             let new_left_len = left_len - count;
+            *left_node.reborrow_mut().into_len_mut() -= count as u16;
+            *right_node.reborrow_mut().into_len_mut() += count as u16;
 
             // Move data.
             {
@@ -1479,8 +1490,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 };
 
                 // Make room for stolen elements in the right child.
-                ptr::copy(right_kv.0, right_kv.0.add(count), right_len);
-                ptr::copy(right_kv.1, right_kv.1.add(count), right_len);
+                shift_kv(right_kv, 0, count, right_len);
 
                 // Move elements from the left child to the right one.
                 move_kv(left_kv, new_left_len + 1, right_kv, 0, count - 1);
@@ -1492,16 +1502,10 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 move_kv(left_kv, new_left_len, parent_kv, 0, 1);
             }
 
-            *left_node.reborrow_mut().into_len_mut() -= count as u16;
-            *right_node.reborrow_mut().into_len_mut() += count as u16;
-
             match (left_node.reborrow_mut().force(), right_node.reborrow_mut().force()) {
                 (ForceResult::Internal(left), ForceResult::Internal(mut right)) => {
                     // Make room for stolen edges.
-                    let left = left.reborrow();
-                    let right_edges = right.reborrow_mut().into_edge_area_slice().as_mut_ptr();
-                    ptr::copy(right_edges, right_edges.add(count), right_len + 1);
-                    right.correct_childrens_parent_links(count..count + right_len + 1);
+                    shift_edges(right.reborrow_mut(), 0, count, right_len + 1);
 
                     move_edges(left, new_left_len + 1, right, 0, count);
                 }
@@ -1524,6 +1528,8 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             assert!(right_len >= count);
 
             let new_right_len = right_len - count;
+            *left_node.reborrow_mut().into_len_mut() += count as u16;
+            *right_node.reborrow_mut().into_len_mut() -= count as u16;
 
             // Move data.
             {
@@ -1543,22 +1549,16 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 // Move the right-most stolen pair to the parent.
                 move_kv(right_kv, count - 1, parent_kv, 0, 1);
 
-                // Fix right indexing
-                ptr::copy(right_kv.0.add(count), right_kv.0, new_right_len);
-                ptr::copy(right_kv.1.add(count), right_kv.1, new_right_len);
+                // Fix right indexing.
+                shift_kv(right_kv, count, 0, new_right_len);
             }
-
-            *left_node.reborrow_mut().into_len_mut() += count as u16;
-            *right_node.reborrow_mut().into_len_mut() -= count as u16;
 
             match (left_node.reborrow_mut().force(), right_node.reborrow_mut().force()) {
                 (ForceResult::Internal(left), ForceResult::Internal(mut right)) => {
-                    move_edges(right.reborrow(), 0, left, left_len + 1, count);
+                    move_edges(right.reborrow_mut(), 0, left, left_len + 1, count);
 
                     // Fix right indexing.
-                    let right_edges = right.reborrow_mut().into_edge_area_slice().as_mut_ptr();
-                    ptr::copy(right_edges.add(count), right_edges, new_right_len + 1);
-                    right.correct_childrens_parent_links(0..=new_right_len);
+                    shift_edges(right, count, 0, new_right_len + 1);
                 }
                 (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                 _ => unreachable!(),
@@ -1580,19 +1580,45 @@ unsafe fn move_kv<K, V>(
     }
 }
 
+unsafe fn shift_kv<K, V>(
+    kv: (*mut K, *mut V),
+    source_offset: usize,
+    dest_offset: usize,
+    count: usize,
+) {
+    unsafe {
+        ptr::copy(kv.0.add(source_offset), kv.0.add(dest_offset), count);
+        ptr::copy(kv.1.add(source_offset), kv.1.add(dest_offset), count);
+    }
+}
+
 // Source and destination must have the same height.
 unsafe fn move_edges<'a, K: 'a, V: 'a>(
-    source: NodeRef<marker::Immut<'a>, K, V, marker::Internal>,
+    source: NodeRef<marker::Mut<'a>, K, V, marker::Internal>,
     source_offset: usize,
     mut dest: NodeRef<marker::Mut<'a>, K, V, marker::Internal>,
     dest_offset: usize,
     count: usize,
 ) {
+    debug_assert_eq!(source.height(), dest.height());
     unsafe {
-        let source_ptr = source.edge_area().as_ptr();
-        let dest_ptr = dest.reborrow_mut().into_edge_area_slice().as_mut_ptr();
+        let source_ptr = source.into_edge_pointer_mut();
+        let dest_ptr = dest.reborrow_mut().into_edge_pointer_mut();
         ptr::copy_nonoverlapping(source_ptr.add(source_offset), dest_ptr.add(dest_offset), count);
         dest.correct_childrens_parent_links(dest_offset..dest_offset + count);
+    }
+}
+
+unsafe fn shift_edges<'a, K: 'a, V: 'a>(
+    mut node: NodeRef<marker::Mut<'a>, K, V, marker::Internal>,
+    source_offset: usize,
+    dest_offset: usize,
+    count: usize,
+) {
+    unsafe {
+        let edge_ptr = node.reborrow_mut().into_edge_pointer_mut();
+        ptr::copy(edge_ptr.add(source_offset), edge_ptr.add(dest_offset), count);
+        node.correct_childrens_parent_links(dest_offset..dest_offset + count);
     }
 }
 
@@ -1681,17 +1707,15 @@ impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, ma
             assert!(left_node.height == right_node.height);
 
             if right_new_len > 0 {
+                *left_node.reborrow_mut().into_len_mut() = left_new_len as u16;
+                *right_node.reborrow_mut().into_len_mut() = right_new_len as u16;
+
                 let left_kv = left_node.reborrow_mut().into_kv_pointers_mut();
                 let right_kv = right_node.reborrow_mut().into_kv_pointers_mut();
 
                 move_kv(left_kv, left_new_len, right_kv, 0, right_new_len);
-
-                *left_node.reborrow_mut().into_len_mut() = left_new_len as u16;
-                *right_node.reborrow_mut().into_len_mut() = right_new_len as u16;
-
                 match (left_node.force(), right_node.force()) {
                     (ForceResult::Internal(left), ForceResult::Internal(right)) => {
-                        let left = left.reborrow();
                         move_edges(left, left_new_len + 1, right, 1, right_new_len);
                     }
                     (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
