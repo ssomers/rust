@@ -517,32 +517,14 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Exposes the entire key storage area in the node,
     /// regardless of the node's current length,
     /// having exclusive access to the entire node.
-    unsafe fn key_area(self) -> &'a [MaybeUninit<K>] {
-        Self::as_leaf(&self).keys.as_slice()
+    unsafe fn into_key_area_mut(mut self) -> &'a mut [MaybeUninit<K>] {
+        Self::as_leaf_mut(&mut self).keys.as_mut_slice()
     }
 
-    /// Exposes the entire value storage area in the node,
-    /// regardless of the node's current length,
-    /// having exclusive access to the entire node.
-    unsafe fn val_area(self) -> &'a [MaybeUninit<V>] {
-        Self::as_leaf(&self).vals.as_slice()
-    }
-}
-
-impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
-    /// Exposes the entire storage area for edge contents in the node,
-    /// regardless of the node's current length,
-    /// having exclusive access to the entire node.
-    unsafe fn edge_area(self) -> &'a [MaybeUninit<BoxedNode<K, V>>] {
-        Self::as_internal(&self).edges.as_slice()
-    }
-}
-
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Offers exclusive access to a sized slice of key storage area in the node.
     unsafe fn into_key_area_slice(mut self) -> &'a mut [MaybeUninit<K>] {
         let len = self.len();
@@ -550,6 +532,13 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
         // until the key slice reference is dropped, as we have unique access
         // for the lifetime of the borrow.
         unsafe { Self::as_leaf_mut(&mut self).keys.get_unchecked_mut(..len) }
+    }
+
+    /// Exposes the entire value storage area in the node,
+    /// regardless of the node's current length.
+    /// having exclusive access to the entire node.
+    unsafe fn into_val_area_mut(mut self) -> &'a mut [MaybeUninit<V>] {
+        Self::as_leaf_mut(&mut self).vals.as_mut_slice()
     }
 
     /// Offers exclusive access to a sized slice of value storage area in the node.
@@ -563,6 +552,13 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
 }
 
 impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+    /// Exposes the entire storage area for edge contents in the node,
+    /// regardless of the node's current length,
+    /// having exclusive access to the entire node.
+    unsafe fn into_edge_area_mut(mut self) -> &'a mut [MaybeUninit<BoxedNode<K, V>>] {
+        Self::as_internal_mut(&mut self).edges.as_mut_slice()
+    }
+
     /// Offers exclusive access to a sized slice of storage area for edge contents in the node.
     unsafe fn into_edge_area_slice(mut self) -> &'a mut [MaybeUninit<BoxedNode<K, V>>] {
         let len = self.len();
@@ -1176,12 +1172,12 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
             let v = ptr::read(self.node.reborrow().val_at(self.idx));
 
             ptr::copy_nonoverlapping(
-                self.node.reborrow().key_area().as_ptr().add(self.idx + 1),
+                self.node.reborrow_mut().into_key_area_mut().as_ptr().add(self.idx + 1),
                 new_node.keys.as_mut_ptr(),
                 new_len,
             );
             ptr::copy_nonoverlapping(
-                self.node.reborrow().val_area().as_ptr().add(self.idx + 1),
+                self.node.reborrow_mut().into_val_area_mut().as_ptr().add(self.idx + 1),
                 new_node.vals.as_mut_ptr(),
                 new_len,
             );
@@ -1239,7 +1235,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
             let new_len = self.split_new_node_len();
             // Move edges out before reducing length:
             ptr::copy_nonoverlapping(
-                self.node.reborrow().edge_area().as_ptr().add(self.idx + 1),
+                self.node.reborrow_mut().into_edge_area_mut().as_ptr().add(self.idx + 1),
                 new_node.edges.as_mut_ptr(),
                 new_len + 1,
             );
@@ -1348,7 +1344,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
         let mut left_node = self.left_child;
         let left_len = left_node.len();
-        let right_node = self.right_child;
+        let mut right_node = self.right_child;
         let right_len = right_node.len();
 
         assert!(left_len + right_len < CAPACITY);
@@ -1367,8 +1363,8 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             );
             left_node.reborrow_mut().into_key_area_mut_at(left_len).write(parent_key);
             ptr::copy_nonoverlapping(
-                right_node.reborrow().key_area().as_ptr(),
-                left_node.reborrow_mut().into_key_area_slice().as_mut_ptr().add(left_len + 1),
+                right_node.reborrow_mut().into_key_area_mut().as_ptr(),
+                left_node.reborrow_mut().into_key_area_mut().as_mut_ptr().add(left_len + 1),
                 right_len,
             );
 
@@ -1378,8 +1374,8 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             );
             left_node.reborrow_mut().into_val_area_mut_at(left_len).write(parent_val);
             ptr::copy_nonoverlapping(
-                right_node.reborrow().val_area().as_ptr(),
-                left_node.reborrow_mut().into_val_area_slice().as_mut_ptr().add(left_len + 1),
+                right_node.reborrow_mut().into_val_area_mut().as_ptr(),
+                left_node.reborrow_mut().into_val_area_mut().as_mut_ptr().add(left_len + 1),
                 right_len,
             );
 
@@ -1395,10 +1391,10 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 // SAFETY: the height of the nodes being merged is one below the height
                 // of the node of this edge, thus above zero, so they are internal.
                 let mut left_node = left_node.reborrow_mut().cast_to_internal_unchecked();
-                let right_node = right_node.cast_to_internal_unchecked();
+                let mut right_node = right_node.cast_to_internal_unchecked();
                 ptr::copy_nonoverlapping(
-                    right_node.reborrow().edge_area().as_ptr(),
-                    left_node.reborrow_mut().into_edge_area_slice().as_mut_ptr().add(left_len + 1),
+                    right_node.reborrow_mut().into_edge_area_mut().as_ptr(),
+                    left_node.reborrow_mut().into_edge_area_mut().as_mut_ptr().add(left_len + 1),
                     right_len + 1,
                 );
 
