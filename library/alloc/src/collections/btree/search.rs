@@ -1,5 +1,4 @@
 use core::borrow::Borrow;
-use core::cmp::Ordering;
 
 use super::node::{marker, ForceResult::*, Handle, NodeRef};
 
@@ -71,15 +70,9 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
         Q: Ord,
         K: Borrow<Q>,
     {
-        let node = self.reborrow();
-        let keys = node.keys();
-        for (i, k) in keys.iter().enumerate() {
-            match key.cmp(k.borrow()) {
-                Ordering::Greater => {}
-                Ordering::Equal => return IndexResult::KV(i),
-                Ordering::Less => return IndexResult::Edge(i),
-            }
+        match self.reborrow().keys().binary_search_by_key(&key, Borrow::borrow) {
+            Ok(i) => IndexResult::KV(i),
+            Err(i) => IndexResult::Edge(i),
         }
-        IndexResult::Edge(keys.len())
     }
 }
