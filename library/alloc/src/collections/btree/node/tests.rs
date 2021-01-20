@@ -104,6 +104,5 @@ fn test_partial_cmp_eq() {
 fn test_sizes() {
     assert_eq!(core::mem::size_of::<LeafNode<(), ()>>(), 16);
     assert_eq!(core::mem::size_of::<LeafNode<i64, i64>>(), 16 + CAPACITY * 8 * 2);
-    assert_eq!(core::mem::size_of::<InternalNode<(), ()>>(), 112);
-    assert_eq!(core::mem::size_of::<InternalNode<i64, i64>>(), 112 + CAPACITY * 8 * 2);
+    assert_eq!(core::mem::size_of::<InternalNode<(), ()>>(), 16 + (CAPACITY + 1) * 8);
 }
