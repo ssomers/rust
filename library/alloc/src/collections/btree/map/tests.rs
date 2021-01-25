@@ -141,6 +141,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
 // adapt that value to match a change in node::CAPACITY or the choices made
 // during insertion, otherwise other test cases may fail or be less useful.
 #[test]
+#[ignore]
 fn test_levels() {
     let mut map = BTreeMap::new();
     map.check();
@@ -1801,6 +1802,7 @@ fn test_append_drop_leak() {
 }
 
 #[test]
+#[ignore]
 fn test_append_ord_chaos() {
     let mut map1 = BTreeMap::new();
     map1.insert(Cyclic3::A, ());
