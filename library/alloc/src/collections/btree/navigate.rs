@@ -421,12 +421,10 @@ impl<'a, K, V> Handle<NodeRef<marker::ValMut<'a>, K, V, marker::Leaf>, marker::E
     /// # Safety
     /// There must be another KV in the direction travelled.
     unsafe fn next_unchecked(&mut self) -> (&'a K, &'a mut V) {
-        let kv = super::mem::replace(self, |leaf_edge| {
+        super::mem::replace(self, |leaf_edge| {
             let kv = leaf_edge.next_kv().ok().unwrap();
-            (unsafe { ptr::read(&kv) }.next_leaf_edge(), kv)
-        });
-        // Doing this last is faster, according to benchmarks.
-        kv.into_kv_valmut()
+            (unsafe { ptr::read(&kv) }.next_leaf_edge(), kv.into_kv_valmut())
+        })
     }
 
     /// Moves the leaf edge handle to the previous leaf and returns references to the
@@ -435,12 +433,10 @@ impl<'a, K, V> Handle<NodeRef<marker::ValMut<'a>, K, V, marker::Leaf>, marker::E
     /// # Safety
     /// There must be another KV in the direction travelled.
     unsafe fn next_back_unchecked(&mut self) -> (&'a K, &'a mut V) {
-        let kv = super::mem::replace(self, |leaf_edge| {
+        super::mem::replace(self, |leaf_edge| {
             let kv = leaf_edge.next_back_kv().ok().unwrap();
-            (unsafe { ptr::read(&kv) }.next_back_leaf_edge(), kv)
-        });
-        // Doing this last is faster, according to benchmarks.
-        kv.into_kv_valmut()
+            (unsafe { ptr::read(&kv) }.next_back_leaf_edge(), kv.into_kv_valmut())
+        })
     }
 }
 
